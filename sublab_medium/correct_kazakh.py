@@ -10,6 +10,7 @@ Fill in every `TODO`. Keep the function signatures.
 import json
 import os
 import sys
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -21,7 +22,7 @@ DATA = Path(__file__).resolve().parent.parent / "data" / "kazakh_errors.json"
 
 # Every model you must run. Keep the order - it is the order of your table.
 MODELS = [
-    ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+    ("openrouter", "google/gemma-3-27b-it"),
     ("openrouter", "qwen/qwen3.8-27b"),
     ("openrouter", "deepseek/deepseek-v4-flash-0731"),
     ("openai", "gpt-5.6-luna"),
@@ -49,8 +50,18 @@ def build_prompt(corrupted: str) -> str:
     Asking for a fixed shape instead of prose is how you make six models
     comparable. Week 3 turns this into a topic.
     """
-    # TODO
-    raise NotImplementedError
+    return (
+            "The following text is Kazakh, but it has been damaged: it may contain "
+            "letters from the wrong alphabet (Russian lookalikes or Latin homoglyphs "
+            "substituted for Kazakh/Cyrillic letters), words that have been joined "
+            "together, a missing hyphen, or a doubled letter.\n\n"
+            "Corrupted text:\n" + corrupted + "\n\n"
+            "Return ONLY a JSON object, with no other text before or after it, in "
+            "exactly this shape:\n"
+            '{"corrected": "the fixed Kazakh sentence", "changes": ["a short '
+            'description of each change you made"]}\n\n'
+            "Do not include any explanation outside the JSON."
+        )
 
 
 def parse_response(text: str) -> dict:
@@ -60,8 +71,24 @@ def parse_response(text: str) -> dict:
     like. Be forgiving: find the JSON, parse it, and raise ValueError with the
     offending text if you truly cannot.
     """
-    # TODO
-    raise NotImplementedError
+    fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    candidate = fence_match.group(1) if fence_match else text
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("No JSON object found in response: " + repr(text))
+
+    json_str = candidate[start:end + 1]
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Could not parse JSON: " + repr(text)) from exc
+
+    if "corrected" not in data or "changes" not in data:
+        raise ValueError("JSON missing required keys: " + repr(text))
+
+    return data
 
 
 def correct_with(model: str, corrupted: str, via: str) -> dict:
@@ -75,8 +102,15 @@ def correct_with(model: str, corrupted: str, via: str) -> dict:
     `ask_once` from sublab_easy - there is no conversation here, just one
     prompt and one reply, eight times per model.
     """
-    # TODO
-    raise NotImplementedError
+    prompt = build_prompt(corrupted)
+    reply = ask_once(prompt, model=model, via=via)
+    parsed = parse_response(reply["text"])
+    return {
+        "corrected": parsed["corrected"],
+        "changes": parsed["changes"],
+        "input_tokens": reply["input_tokens"],
+        "output_tokens": reply["output_tokens"],
+    }
 
 
 def score_correction(returned: str, expected: str) -> dict:
@@ -90,8 +124,14 @@ def score_correction(returned: str, expected: str) -> dict:
     the original still counts as a correction. Your written analysis is where
     you make that call.
     """
-    # TODO
-    raise NotImplementedError
+    exact = returned.strip() == expected.strip()
+    length_diff = abs(len(returned) - len(expected))
+    common_len = min(len(returned), len(expected))
+    positional_diff = sum(
+        1 for i in range(common_len) if returned[i] != expected[i]
+    )
+    char_diff = positional_diff + length_diff
+    return {"exact": exact, "char_diff": char_diff}
 
 
 def run_all() -> list[dict]:
